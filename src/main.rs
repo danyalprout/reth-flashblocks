@@ -1,5 +1,7 @@
+mod cache;
 mod rpc;
 
+use crate::cache::Cache;
 use crate::rpc::{BaseApiExt, BaseApiServer, EthApiExt, EthApiOverrideServer};
 use clap::Parser;
 use reth::builder::Node;
@@ -13,6 +15,9 @@ use reth_optimism_node::OpNode;
 use tracing::info;
 
 fn main() {
+    // Local testing only for now
+    let cache = Cache::new("redis://localhost:6379").unwrap();
+
     Cli::<OpChainSpecParser, RollupArgs>::parse()
         .run(|builder, rollup_args| async move {
             info!("Starting custom Base node");
@@ -25,7 +30,7 @@ fn main() {
                 .with_add_ons(op_node.add_ons())
                 .on_component_initialized(move |_ctx| Ok(()))
                 .extend_rpc_modules(move |ctx| {
-                    let api_ext = EthApiExt::new(ctx.registry.eth_api().clone());
+                    let api_ext = EthApiExt::new(ctx.registry.eth_api().clone(), cache);
                     ctx.modules.replace_configured(api_ext.into_rpc())?;
 
                     let base_ext = BaseApiExt {};

@@ -1,12 +1,19 @@
 use alloy_eips::BlockNumberOrTag;
+use alloy_primitives::TxHash;
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     proc_macros::rpc,
 };
 use op_alloy_network::Optimism;
-use reth_rpc_eth_api::{helpers::FullEthApi, RpcBlock};
+use reth_rpc_eth_api::helpers::EthBlocks;
+use reth_rpc_eth_api::{
+    helpers::{EthTransactions, FullEthApi},
+    RpcBlock, RpcReceipt,
+};
 use serde::{Deserialize, Serialize};
 use tracing::info;
+
+use crate::cache::Cache;
 
 #[cfg_attr(not(test), rpc(server, namespace = "eth"))]
 #[cfg_attr(test, rpc(server, client, namespace = "eth"))]
@@ -17,24 +24,31 @@ pub trait EthApiOverride {
         number: BlockNumberOrTag,
         full: bool,
     ) -> RpcResult<Option<RpcBlock<Optimism>>>;
+
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> RpcResult<Option<RpcReceipt<Optimism>>>;
 }
 
 #[derive(Debug)]
 pub struct EthApiExt<Eth> {
     #[allow(dead_code)] // temporary until we implement the flashblocks API
     eth_api: Eth,
+    cache: Cache,
 }
 
 impl<E> EthApiExt<E> {
-    pub const fn new(eth_api: E) -> Self {
-        Self { eth_api }
+    pub const fn new(eth_api: E, cache: Cache) -> Self {
+        Self { eth_api, cache }
     }
 }
 
 #[async_trait]
 impl<Eth> EthApiOverrideServer for EthApiExt<Eth>
 where
-    Eth: FullEthApi + Send + Sync + 'static,
+    Eth: FullEthApi<NetworkTypes = Optimism> + Send + Sync + 'static,
 {
     async fn block_by_number(
         &self,
@@ -48,9 +62,23 @@ where
             }
             _ => {
                 info!("non pending block, using standard flow");
-                todo!()
+                EthBlocks::rpc_block(&self.eth_api, number.into(), _full)
+                    .await
+                    .map_err(Into::into)
             }
         }
+    }
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> RpcResult<Option<RpcReceipt<Optimism>>> {
+        if let Ok(Some(receipt)) = self.cache.get::<RpcReceipt<Optimism>>(&tx_hash.to_string()) {
+            return Ok(Some(receipt));
+        }
+
+        EthTransactions::transaction_receipt(&self.eth_api, tx_hash)
+            .await
+            .map_err(Into::into)
     }
 }
 
